@@ -475,23 +475,22 @@ class AllGpusWidget(Widget):
         for n in self.data.nodes:
             if not n.gpus:
                 continue
+            state_color = STATE_COLORS.get(n.state, "white")
+            # Per-GPU utilization bars (8 chars each, spaced out)
+            gpu_bars = ""
+            bar_w = 8
             for g in n.gpus:
-                # Build utilization bar
-                bar_len = 20
-                filled = g.utilization * bar_len // 100
-                ch, color = gpu_bar_char(g.utilization, g.allocated)
-                bar = f"[{color}]{'█' * filled}[/][dim]{'░' * (bar_len - filled)}[/]"
+                _, color = gpu_bar_char(g.utilization, g.allocated)
+                filled = g.utilization * bar_w // 100
+                pct = f"{g.utilization:>2}%"
+                gpu_bars += f"[{color}]{'█' * filled}{'░' * (bar_w - filled)}[/] [{color}]{pct}[/]  "
 
-                # Status info
-                if g.allocated:
-                    user_info = f"[cyan]{g.user:<10}[/] [dim]{g.job_id}[/]"
-                else:
-                    user_info = "[dim]free[/]"
+            used = sum(1 for g in n.gpus if g.allocated)
+            gpu_label = f"{used}/{len(n.gpus)}"
 
-                state_color = STATE_COLORS.get(n.state, "white")
-                lines.append(
-                    f"  [{state_color}]{n.name:<8}[/]:[cyan]{g.index}[/]  {bar} [{color}]{g.utilization:>3}%[/]  {user_info}"
-                )
+            lines.append(
+                f"  [{state_color}]{n.name:<8}[/]  {gpu_bars}[bold]{gpu_label:>5}[/]"
+            )
 
         return "\n".join(lines) if lines else "[dim]No GPUs[/]"
 
