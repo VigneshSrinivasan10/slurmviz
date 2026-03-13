@@ -494,113 +494,6 @@ class MyJobsWidget(Widget):
         return "\n".join(lines)
 
 
-class GpuGridWidget(Widget):
-    """Per-GPU visualization — a thin vertical bar for every GPU in the cluster."""
-
-    DEFAULT_CSS = """
-    GpuGridWidget {
-        height: 100%;
-        padding: 0 1;
-    }
-    """
-
-    data: reactive[ClusterData | None] = reactive(None)
-
-    def _gpu_bar(self, util: int, allocated: bool, is_mine: bool, is_down: bool, bar_width: int = 12) -> str:
-        """Render a thin horizontal bar for a single GPU."""
-        if is_down:
-            return f"[red]{'✗' * bar_width}[/]"
-        if not allocated:
-            return f"[dim green]{'░' * bar_width}[/]"
-
-        filled = max(1, util * bar_width // 100)
-        empty = bar_width - filled
-
-        if is_mine:
-            c = "bright_green"
-        elif util >= 90:
-            c = "bright_red"
-        elif util >= 70:
-            c = "yellow"
-        elif util >= 40:
-            c = "cyan"
-        else:
-            c = "green"
-
-        return f"[{c}]{'█' * filled}[/][dim]{'░' * empty}[/]"
-
-    def render(self) -> str:
-        if self.data is None:
-            return "[dim]Loading...[/]"
-
-        # Count totals
-        total_gpus = sum(len(n.gpus) for n in self.data.nodes)
-        alloc_gpus = sum(1 for n in self.data.nodes for g in n.gpus if g.allocated)
-        free_gpus = total_gpus - alloc_gpus
-
-        lines = [
-            f"  [bold cyan]⬡ ALL GPUs[/]  "
-            f"[dim]total:[/][bold]{total_gpus}[/]  "
-            f"[dim]alloc:[/][bold]{alloc_gpus}[/]  "
-            f"[dim]free:[/][bold green]{free_gpus}[/]  "
-            f"[dim](bar = utilization per GPU)[/]",
-            "",
-        ]
-
-        # Render per-node: node name then a thin bar for each GPU
-        for n in self.data.nodes:
-            if not n.gpus:
-                continue
-
-            node_color = STATE_COLORS.get(n.state, "white")
-            is_down = n.state in ("down", "drain", "drained")
-
-            # Header line: node name + GPU index labels
-            gpu_indices = "  ".join(f"[dim]{g.index:<12}[/]" for g in n.gpus[:4])
-            # Build GPU bars - 2 per row if >4 GPUs, or all on one row
-            bar_width = 10
-            gpu_rows = []
-            row_gpus = []
-            for g in n.gpus:
-                is_mine = g.user == self.data.user
-                bar = self._gpu_bar(g.utilization, g.allocated, is_mine, is_down, bar_width)
-
-                # Label: util% and user
-                if is_down:
-                    label = f"[red]DOWN[/]"
-                elif not g.allocated:
-                    label = f"[dim green]free[/]"
-                else:
-                    c = "bright_green" if is_mine else "white"
-                    label = f"[{c}]{g.utilization:>3}%[/]"
-
-                row_gpus.append(f"{bar} {label}")
-                if len(row_gpus) == 4:
-                    gpu_rows.append(row_gpus)
-                    row_gpus = []
-            if row_gpus:
-                gpu_rows.append(row_gpus)
-
-            # First row gets the node name
-            for ri, row in enumerate(gpu_rows):
-                prefix = f"  [{node_color}]{n.name:<8}[/] " if ri == 0 else "             "
-                lines.append(prefix + "  ".join(row))
-
-        # Legend
-        lines.append("")
-        lines.append(
-            f"  [dim green]░░[/][dim]=free[/]  "
-            f"[green]██[/][dim]=<40%[/]  "
-            f"[cyan]██[/][dim]=40-69%[/]  "
-            f"[yellow]██[/][dim]=70-89%[/]  "
-            f"[bright_red]██[/][dim]=90%+[/]  "
-            f"[bright_green]██[/][dim]=yours[/]  "
-            f"[red]✗✗[/][dim]=down[/]"
-        )
-
-        return "\n".join(lines)
-
-
 # ── Main App ─────────────────────────────────────────────────────────────────
 
 TCSS = """
@@ -631,12 +524,6 @@ TCSS = """
     overflow-y: auto;
 }
 
-#gpu-panel {
-    height: 1fr;
-    border: solid $accent-darken-2;
-    border-title-color: $text;
-    overflow-y: auto;
-}
 """
 
 
@@ -666,14 +553,12 @@ class SlurmViz(App):
             yield VerticalScroll(NodeMapWidget(id="node-map"), id="node-panel")
             yield VerticalScroll(GpuSummaryWidget(id="gpu-summary"), id="summary-panel")
         yield VerticalScroll(MyJobsWidget(id="my-jobs"), id="jobs-panel")
-        yield VerticalScroll(GpuGridWidget(id="gpu-grid"), id="gpu-panel")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#node-panel").border_title = "NODES"
         self.query_one("#summary-panel").border_title = "GPU SUMMARY"
         self.query_one("#jobs-panel").border_title = "MY JOBS"
-        self.query_one("#gpu-panel").border_title = "ALL GPUs"
         self._refresh_timer = self.set_interval(self.refresh_interval, self._do_refresh)
         self.call_after_refresh(self._do_refresh)
 
@@ -696,7 +581,6 @@ class SlurmViz(App):
         self.query_one("#node-map", NodeMapWidget).data = data
         self.query_one("#gpu-summary", GpuSummaryWidget).data = data
         self.query_one("#my-jobs", MyJobsWidget).data = data
-        self.query_one("#gpu-grid", GpuGridWidget).data = data
 
     def watch_demo_mode(self, value: bool) -> None:
         if value:

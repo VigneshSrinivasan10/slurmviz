@@ -7,7 +7,6 @@ A terminal UI dashboard for monitoring Slurm GPU cluster status, built with [Tex
 - **Node map** — per-node GPU utilization bars with state indicators
 - **GPU summary** — cluster-wide totals and per-user GPU/job breakdown
 - **My jobs** — your running and pending jobs at a glance
-- **GPU grid** — per-GPU utilization bars across the entire cluster
 - **Auto-refresh** — configurable polling interval (default: 5s)
 - **Demo mode** — realistic fake data when Slurm isn't available
 
@@ -42,15 +41,6 @@ A terminal UI dashboard for monitoring Slurm GPU cluster status, built with [Tex
 │ 1000042    train-llama          RUN   12:34:56   8 gpu02       batch       │
 │ 1000051    finetune-vit         RUN    3:21:00   4 gpu14       short       │
 │ 1000067    eval-bert            RUN    0:45:12   4 gpu11       batch       │
-│                                                                           │
-├── ALL GPUs ───────────────────────────────────────────────────────────────┤
-│                                                                           │
-│ gpu01    ████░ 72%  ████░ 85%  ████░ 91%  ████░ 67%  ░░░░░ free ░░░░░ fr.│
-│ gpu02    ████░ 95%  ████░ 88%  ████░ 92%  ████░ 79%  ████░ 83%  ████░ 90%│
-│ gpu03    ░░░░░ free ░░░░░ free ░░░░░ free ░░░░░ free ░░░░░ free ░░░░░ fr.│
-│ ...                                                                       │
-│                                                                           │
-│ ░░=free  ██=<40%  ██=40-69%  ██=70-89%  ██=90%+  ██=yours  ✗✗=down      │
 │                                                                           │
 ├───────────────────────────────────────────────────────────────────────────┤
 │  q Quit   r Refresh   d Demo                                              │
