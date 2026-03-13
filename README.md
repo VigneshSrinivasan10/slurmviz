@@ -58,12 +58,11 @@ A terminal UI dashboard for monitoring Slurm GPU cluster status, built with [Tex
 ## Installation
 
 ```bash
+source .venv/bin/activate
 uv sync
 ```
 
 ## Usage
-
-First, install the package:
 
 ```bash
 uv pip install -e .
