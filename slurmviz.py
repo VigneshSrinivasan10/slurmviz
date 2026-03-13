@@ -202,7 +202,7 @@ def generate_demo_data() -> ClusterData:
     job_counter = 1000000
 
     for i in range(1, 17):
-        name = f"gpu{i:02d}"
+        name = f"node{i:02d}"
         total_gpus = random.choice([4, 4, 8, 8, 8])
         total_cpus = total_gpus * 16
 
