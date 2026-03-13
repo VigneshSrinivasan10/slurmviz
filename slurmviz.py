@@ -80,10 +80,9 @@ async def fetch_slurm_data() -> ClusterData:
     user = os.environ.get("USER", "unknown")
 
     # Run all commands in parallel
-    node_raw, job_raw, my_job_raw, gpu_alloc_raw = await asyncio.gather(
+    node_raw, job_raw, gpu_alloc_raw = await asyncio.gather(
         run_cmd('sinfo -N -o "%N %T %G %C %m" --noheader 2>/dev/null'),
         run_cmd('squeue -o "%i %j %u %t %M %b %N %P" --noheader 2>/dev/null'),
-        run_cmd(f'squeue -u {user} -o "%i %j %u %t %M %b %N %P" --noheader 2>/dev/null'),
         run_cmd('squeue -o "%N %b %u %i" --noheader 2>/dev/null'),
     )
 
@@ -176,10 +175,13 @@ async def fetch_slurm_data() -> ClusterData:
             ))
         return jobs
 
+    all_jobs = parse_jobs(job_raw)
+    my_jobs = [j for j in all_jobs if j.user == user]
+
     return ClusterData(
         nodes=sorted(nodes, key=lambda n: n.name),
-        jobs=parse_jobs(job_raw),
-        my_jobs=parse_jobs(my_job_raw),
+        jobs=all_jobs,
+        my_jobs=my_jobs,
         user=user,
     )
 
@@ -201,7 +203,7 @@ def generate_demo_data() -> ClusterData:
     my_jobs = []
     job_counter = 1000000
 
-    for i in range(1, 17):
+    for i in range(1, 41):
         name = f"node{i:02d}"
         total_gpus = random.choice([4, 4, 8, 8, 8])
         total_cpus = total_gpus * 16
@@ -327,211 +329,129 @@ def gpu_bar_char(util: int, allocated: bool) -> tuple[str, str]:
     return "▒", "red"
 
 
-class NodeMapWidget(Widget):
-    """Shows all nodes with per-node GPU utilization bars."""
-
-    DEFAULT_CSS = """
-    NodeMapWidget {
-        height: 100%;
-        padding: 0 1;
-    }
-    """
-
-    data: reactive[ClusterData | None] = reactive(None)
-
-    def render(self) -> str:
-        if self.data is None:
-            return "[dim]Loading...[/]"
-
-        lines = []
-        for n in self.data.nodes:
-            color = STATE_COLORS.get(n.state, "white")
-            # State indicator
-            if n.state in ("down", "drain", "drained"):
-                dot = f"[{color}]✗[/]"
-            elif n.state == "idle":
-                dot = f"[{color}]●[/]"
-            elif n.state == "mixed":
-                dot = f"[{color}]◐[/]"
-            else:
-                dot = f"[{color}]●[/]"
-
-            # Per-GPU mini bar
-            bar = ""
-            if n.gpus:
-                for g in n.gpus:
-                    ch, c = gpu_bar_char(g.utilization, g.allocated)
-                    bar += f"[{c}]{ch}[/]"
-            else:
-                bar = "[dim]--[/]"
-
-            gpu_label = f"{n.used_gpus}/{n.total_gpus}"
-            state_label = f"[{color}]{n.state[:5]:>5}[/]"
-            lines.append(
-                f" {dot} [bold]{n.name:<8}[/] {bar} [bold]{gpu_label:>5}[/] {state_label}"
-            )
-
-        return "\n".join(lines) if lines else "[dim]No nodes[/]"
-
-
-class GpuSummaryWidget(Widget):
-    """Shows cluster-wide GPU summary and per-user breakdown."""
-
-    DEFAULT_CSS = """
-    GpuSummaryWidget {
-        height: 100%;
-        padding: 0 1;
-    }
-    """
-
-    data: reactive[ClusterData | None] = reactive(None)
-
-    def render(self) -> str:
-        if self.data is None:
-            return "[dim]Loading...[/]"
-
-        nodes = self.data.nodes
-        total = sum(n.total_gpus for n in nodes)
-        down_gpus = sum(
-            n.total_gpus for n in nodes if n.state in ("down", "drain", "drained")
-        )
-        used = sum(n.used_gpus for n in nodes)
-        free = total - down_gpus - used
-        usable = total - down_gpus
-        pct = (free * 100 // usable) if usable > 0 else 0
-
-        # Big bar
-        bar_len = 30
-        filled = pct * bar_len // 100
-        bar = f"[green]{'█' * filled}[/][dim]{'░' * (bar_len - filled)}[/]"
-
-        # Color for percentage
-        if pct >= 50:
-            pct_color = "green"
-        elif pct >= 20:
-            pct_color = "yellow"
+def render_node_map(data: ClusterData | None) -> str:
+    if data is None:
+        return "[dim]Loading...[/]"
+    lines = []
+    for n in data.nodes:
+        color = STATE_COLORS.get(n.state, "white")
+        if n.state in ("down", "drain", "drained"):
+            dot = f"[{color}]✗[/]"
+        elif n.state == "mixed":
+            dot = f"[{color}]◐[/]"
         else:
-            pct_color = "red"
-
-        lines = [
-            f"[bold]  GPU CLUSTER[/]",
-            f"",
-            f"  [dim]Total[/] [bold]{total:>4}[/]   [dim]Used[/] [bold]{used:>4}[/]   [dim]Free[/] [bold green]{free:>4}[/]",
-            f"  {bar} [{pct_color} bold]{pct:>3}%[/] [dim]free[/]",
-            f"",
-        ]
-
-        if down_gpus > 0:
-            lines.append(f"  [red]⚠ {down_gpus} GPUs offline (down/drain)[/]")
-            lines.append("")
-
-        # Per-user breakdown
-        user_gpus: dict[str, int] = {}
-        user_jobs: dict[str, int] = {}
-        for j in self.data.jobs:
-            user_jobs[j.user] = user_jobs.get(j.user, 0) + 1
-            if j.state in ("R", "CG"):
-                user_gpus[j.user] = user_gpus.get(j.user, 0) + j.num_gpus
-
-        sorted_users = sorted(user_gpus.items(), key=lambda x: -x[1])
-
-        lines.append(f"  [bold]PER-USER GPU USAGE[/]")
-        lines.append(f"  [dim]{'USER':<12} {'GPUs':>4} {'JOBS':>4}  {'':20}[/]")
-
-        for u, g in sorted_users[:10]:
-            j = user_jobs.get(u, 0)
-            u_pct = (g * 100 // usable) if usable > 0 else 0
-            u_bar_len = 16
-            u_filled = u_pct * u_bar_len // 100
-            u_bar = f"[yellow]{'█' * u_filled}[/][dim]{'░' * (u_bar_len - u_filled)}[/]"
-
-            marker = "►" if u == self.data.user else " "
-            u_color = "green bold" if u == self.data.user else "white"
-
-            lines.append(
-                f"  [{u_color}]{marker}{u:<11}[/] [cyan]{g:>4}[/] [dim]{j:>4}[/]  {u_bar} [bold]{u_pct:>2}%[/]"
-            )
-
-        return "\n".join(lines)
-
-
-class AllGpusWidget(Widget):
-    """Shows every GPU in the cluster with individual utilization bars."""
-
-    DEFAULT_CSS = """
-    AllGpusWidget {
-        height: 100%;
-        padding: 0 1;
-    }
-    """
-
-    data: reactive[ClusterData | None] = reactive(None)
-
-    def render(self) -> str:
-        if self.data is None:
-            return "[dim]Loading...[/]"
-
-        lines = []
-        for n in self.data.nodes:
-            if not n.gpus:
-                continue
-            state_color = STATE_COLORS.get(n.state, "white")
-            # Per-GPU utilization bars (8 chars each, spaced out)
-            gpu_bars = ""
-            bar_w = 8
+            dot = f"[{color}]●[/]"
+        bar = ""
+        if n.gpus:
             for g in n.gpus:
-                _, color = gpu_bar_char(g.utilization, g.allocated)
-                filled = g.utilization * bar_w // 100
-                pct = f"{g.utilization:>2}%"
-                gpu_bars += f"[{color}]{'█' * filled}{'░' * (bar_w - filled)}[/] [{color}]{pct}[/]  "
-
-            used = sum(1 for g in n.gpus if g.allocated)
-            gpu_label = f"{used}/{len(n.gpus)}"
-
-            lines.append(
-                f"  [{state_color}]{n.name:<8}[/]  {gpu_bars}[bold]{gpu_label:>5}[/]"
-            )
-
-        return "\n".join(lines) if lines else "[dim]No GPUs[/]"
-
-
-class MyJobsWidget(Widget):
-    """Shows current user's jobs."""
-
-    DEFAULT_CSS = """
-    MyJobsWidget {
-        height: 100%;
-        padding: 0 1;
-    }
-    """
-
-    data: reactive[ClusterData | None] = reactive(None)
-
-    def render(self) -> str:
-        if self.data is None:
-            return "[dim]Loading...[/]"
-
-        jobs = self.data.my_jobs
-        total_gpus = sum(j.num_gpus for j in jobs if j.state in ("R", "CG"))
-
-        lines = [
-            f"  [bold cyan]◈ MY JOBS[/]  [dim]jobs:[/][bold]{len(jobs)}[/]  [dim]gpus:[/][bold green]{total_gpus}[/]",
-            f"  [dim]{'ID':<10} {'NAME':<20} {'ST':>3} {'TIME':>10} {'GPU':>3} {'NODE':<12} {'PART':<10}[/]",
-        ]
-
-        if not jobs:
-            lines.append(f"  [dim]No jobs running[/]")
+                ch, c = gpu_bar_char(g.utilization, g.allocated)
+                bar += f"[{c}]{ch}[/]"
         else:
-            for j in jobs:
-                state_color = {"R": "green", "PD": "yellow", "CG": "magenta"}.get(j.state, "red")
-                state_label = {"R": "RUN", "PD": "PND", "CG": "CMP"}.get(j.state, j.state)
-                name = j.name[:18] + ".." if len(j.name) > 20 else j.name
-                lines.append(
-                    f"  [white]{j.job_id:<10}[/] [bold]{name:<20}[/] [{state_color}]{state_label:>3}[/] "
-                    f"[dim]{j.elapsed:>10}[/] [cyan]{j.num_gpus:>3}[/] [green]{j.node:<12}[/] [dim]{j.partition:<10}[/]"
-                )
+            bar = "[dim]--[/]"
+        gpu_label = f"{n.used_gpus}/{n.total_gpus}"
+        state_label = f"[{color}]{n.state[:5]:>5}[/]"
+        lines.append(
+            f" {dot} [bold]{n.name:<8}[/] {bar} [bold]{gpu_label:>5}[/] {state_label}"
+        )
+    return "\n".join(lines) if lines else "[dim]No nodes[/]"
 
-        return "\n".join(lines)
+
+def render_gpu_summary(data: ClusterData | None) -> str:
+    if data is None:
+        return "[dim]Loading...[/]"
+    nodes = data.nodes
+    total = sum(n.total_gpus for n in nodes)
+    down_gpus = sum(n.total_gpus for n in nodes if n.state in ("down", "drain", "drained"))
+    used = sum(n.used_gpus for n in nodes)
+    free = total - down_gpus - used
+    usable = total - down_gpus
+    pct = (free * 100 // usable) if usable > 0 else 0
+    bar_len = 30
+    filled = pct * bar_len // 100
+    bar = f"[green]{'█' * filled}[/][dim]{'░' * (bar_len - filled)}[/]"
+    if pct >= 50:
+        pct_color = "green"
+    elif pct >= 20:
+        pct_color = "yellow"
+    else:
+        pct_color = "red"
+    lines = [
+        f"[bold]  GPU CLUSTER[/]",
+        f"",
+        f"  [dim]Total[/] [bold]{total:>4}[/]   [dim]Used[/] [bold]{used:>4}[/]   [dim]Free[/] [bold green]{free:>4}[/]",
+        f"  {bar} [{pct_color} bold]{pct:>3}%[/] [dim]free[/]",
+        f"",
+    ]
+    if down_gpus > 0:
+        lines.append(f"  [red]⚠ {down_gpus} GPUs offline (down/drain)[/]")
+        lines.append("")
+    user_gpus: dict[str, int] = {}
+    user_jobs: dict[str, int] = {}
+    for j in data.jobs:
+        user_jobs[j.user] = user_jobs.get(j.user, 0) + 1
+        if j.state in ("R", "CG"):
+            user_gpus[j.user] = user_gpus.get(j.user, 0) + j.num_gpus
+    sorted_users = sorted(user_gpus.items(), key=lambda x: -x[1])
+    lines.append(f"  [bold]PER-USER GPU USAGE[/]")
+    lines.append(f"  [dim]{'USER':<12} {'GPUs':>4} {'JOBS':>4}  {'':20}[/]")
+    for u, g in sorted_users[:10]:
+        j = user_jobs.get(u, 0)
+        u_pct = (g * 100 // usable) if usable > 0 else 0
+        u_bar_len = 16
+        u_filled = u_pct * u_bar_len // 100
+        u_bar = f"[yellow]{'█' * u_filled}[/][dim]{'░' * (u_bar_len - u_filled)}[/]"
+        marker = "►" if u == data.user else " "
+        u_color = "green bold" if u == data.user else "white"
+        lines.append(
+            f"  [{u_color}]{marker}{u:<11}[/] [cyan]{g:>4}[/] [dim]{j:>4}[/]  {u_bar} [bold]{u_pct:>2}%[/]"
+        )
+    return "\n".join(lines)
+
+
+def render_all_gpus(data: ClusterData | None) -> str:
+    if data is None:
+        return "[dim]Loading...[/]"
+    lines = []
+    for n in data.nodes:
+        if not n.gpus:
+            continue
+        state_color = STATE_COLORS.get(n.state, "white")
+        gpu_bars = ""
+        bar_w = 8
+        for g in n.gpus:
+            _, color = gpu_bar_char(g.utilization, g.allocated)
+            filled = g.utilization * bar_w // 100
+            pct = f"{g.utilization:>2}%"
+            gpu_bars += f"[{color}]{'█' * filled}{'░' * (bar_w - filled)}[/] [{color}]{pct}[/]  "
+        used = sum(1 for g in n.gpus if g.allocated)
+        gpu_label = f"{used}/{len(n.gpus)}"
+        lines.append(
+            f"  [{state_color}]{n.name:<8}[/]  {gpu_bars}[bold]{gpu_label:>5}[/]"
+        )
+    return "\n".join(lines) if lines else "[dim]No GPUs[/]"
+
+
+def render_my_jobs(data: ClusterData | None) -> str:
+    if data is None:
+        return "[dim]Loading...[/]"
+    jobs = data.my_jobs
+    total_gpus = sum(j.num_gpus for j in jobs if j.state in ("R", "CG"))
+    lines = [
+        f"  [bold cyan]◈ MY JOBS[/]  [dim]jobs:[/][bold]{len(jobs)}[/]  [dim]gpus:[/][bold green]{total_gpus}[/]",
+        f"  [dim]{'ID':<10} {'NAME':<20} {'ST':>3} {'TIME':>10} {'GPU':>3} {'NODE':<12} {'PART':<10}[/]",
+    ]
+    if not jobs:
+        lines.append(f"  [dim]No jobs running[/]")
+    else:
+        for j in jobs:
+            state_color = {"R": "green", "PD": "yellow", "CG": "magenta"}.get(j.state, "red")
+            state_label = {"R": "RUN", "PD": "PND", "CG": "CMP"}.get(j.state, j.state)
+            name = j.name[:18] + ".." if len(j.name) > 20 else j.name
+            lines.append(
+                f"  [white]{j.job_id:<10}[/] [bold]{name:<20}[/] [{state_color}]{state_label:>3}[/] "
+                f"[dim]{j.elapsed:>10}[/] [cyan]{j.num_gpus:>3}[/] [green]{j.node:<12}[/] [dim]{j.partition:<10}[/]"
+            )
+    return "\n".join(lines)
 
 
 # ── Main App ─────────────────────────────────────────────────────────────────
@@ -564,8 +484,7 @@ TCSS = """
 }
 
 #jobs-panel {
-    height: auto;
-    max-height: 12;
+    height: 1fr;
     border: solid $accent-darken-2;
     border-title-color: $text;
     overflow-y: auto;
@@ -583,6 +502,10 @@ class SlurmViz(App):
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
         ("d", "toggle_demo", "Demo"),
+        ("1", "focus_nodes", "Nodes"),
+        ("2", "focus_summary", "Summary"),
+        ("3", "focus_gpus", "GPUs"),
+        ("4", "focus_jobs", "Jobs"),
     ]
 
     demo_mode: reactive[bool] = reactive(False)
@@ -597,10 +520,10 @@ class SlurmViz(App):
     def compose(self):
         yield Header(show_clock=True)
         with Horizontal(id="top-row"):
-            yield VerticalScroll(NodeMapWidget(id="node-map"), id="node-panel")
-            yield VerticalScroll(GpuSummaryWidget(id="gpu-summary"), id="summary-panel")
-        yield VerticalScroll(AllGpusWidget(id="all-gpus"), id="gpus-panel")
-        yield VerticalScroll(MyJobsWidget(id="my-jobs"), id="jobs-panel")
+            yield VerticalScroll(Static(id="node-map"), id="node-panel")
+            yield VerticalScroll(Static(id="gpu-summary"), id="summary-panel")
+        yield VerticalScroll(Static(id="all-gpus"), id="gpus-panel")
+        yield VerticalScroll(Static(id="my-jobs"), id="jobs-panel")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -627,10 +550,10 @@ class SlurmViz(App):
                 self.demo_mode = True
                 self.sub_title = "DEMO MODE (error)"
 
-        self.query_one("#node-map", NodeMapWidget).data = data
-        self.query_one("#gpu-summary", GpuSummaryWidget).data = data
-        self.query_one("#all-gpus", AllGpusWidget).data = data
-        self.query_one("#my-jobs", MyJobsWidget).data = data
+        self.query_one("#node-map", Static).update(render_node_map(data))
+        self.query_one("#gpu-summary", Static).update(render_gpu_summary(data))
+        self.query_one("#all-gpus", Static).update(render_all_gpus(data))
+        self.query_one("#my-jobs", Static).update(render_my_jobs(data))
 
     def watch_demo_mode(self, value: bool) -> None:
         if value:
@@ -640,6 +563,34 @@ class SlurmViz(App):
 
     def action_refresh(self) -> None:
         self.call_after_refresh(self._do_refresh)
+
+    _PANELS = {
+        "nodes": "node-panel",
+        "summary": "summary-panel",
+        "gpus": "gpus-panel",
+        "jobs": "jobs-panel",
+    }
+
+    def _highlight_panel(self, panel_id: str) -> None:
+        for pid in self._PANELS.values():
+            p = self.query_one(f"#{pid}")
+            if pid == panel_id:
+                p.styles.border = ("double", "green")
+                p.focus()
+            else:
+                p.styles.border = ("solid", "grey")
+
+    def action_focus_nodes(self) -> None:
+        self._highlight_panel("node-panel")
+
+    def action_focus_summary(self) -> None:
+        self._highlight_panel("summary-panel")
+
+    def action_focus_gpus(self) -> None:
+        self._highlight_panel("gpus-panel")
+
+    def action_focus_jobs(self) -> None:
+        self._highlight_panel("jobs-panel")
 
     def action_toggle_demo(self) -> None:
         self.demo_mode = not self.demo_mode

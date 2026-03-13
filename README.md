@@ -89,6 +89,11 @@ slurmviz -r 10
 | `q` | Quit                |
 | `r` | Refresh immediately |
 | `d` | Toggle demo mode    |
+| `1` | Focus Nodes panel   |
+| `2` | Focus Summary panel |
+| `3` | Focus GPUs panel    |
+| `4` | Focus Jobs panel    |
+| `↑` / `↓` | Scroll focused panel |
 
 ## Requirements
 
