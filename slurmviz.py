@@ -557,7 +557,7 @@ TCSS = """
 }
 
 #gpus-panel {
-    height: 1fr;
+    height: 2fr;
     border: solid $accent-darken-2;
     border-title-color: $text;
     overflow-y: auto;
