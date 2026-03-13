@@ -455,6 +455,47 @@ class GpuSummaryWidget(Widget):
         return "\n".join(lines)
 
 
+class AllGpusWidget(Widget):
+    """Shows every GPU in the cluster with individual utilization bars."""
+
+    DEFAULT_CSS = """
+    AllGpusWidget {
+        height: 100%;
+        padding: 0 1;
+    }
+    """
+
+    data: reactive[ClusterData | None] = reactive(None)
+
+    def render(self) -> str:
+        if self.data is None:
+            return "[dim]Loading...[/]"
+
+        lines = []
+        for n in self.data.nodes:
+            if not n.gpus:
+                continue
+            for g in n.gpus:
+                # Build utilization bar
+                bar_len = 20
+                filled = g.utilization * bar_len // 100
+                ch, color = gpu_bar_char(g.utilization, g.allocated)
+                bar = f"[{color}]{'█' * filled}[/][dim]{'░' * (bar_len - filled)}[/]"
+
+                # Status info
+                if g.allocated:
+                    user_info = f"[cyan]{g.user:<10}[/] [dim]{g.job_id}[/]"
+                else:
+                    user_info = "[dim]free[/]"
+
+                state_color = STATE_COLORS.get(n.state, "white")
+                lines.append(
+                    f"  [{state_color}]{n.name:<8}[/]:[cyan]{g.index}[/]  {bar} [{color}]{g.utilization:>3}%[/]  {user_info}"
+                )
+
+        return "\n".join(lines) if lines else "[dim]No GPUs[/]"
+
+
 class MyJobsWidget(Widget):
     """Shows current user's jobs."""
 
@@ -516,6 +557,13 @@ TCSS = """
     overflow-y: auto;
 }
 
+#gpus-panel {
+    height: 1fr;
+    border: solid $accent-darken-2;
+    border-title-color: $text;
+    overflow-y: auto;
+}
+
 #jobs-panel {
     height: auto;
     max-height: 12;
@@ -552,12 +600,14 @@ class SlurmViz(App):
         with Horizontal(id="top-row"):
             yield VerticalScroll(NodeMapWidget(id="node-map"), id="node-panel")
             yield VerticalScroll(GpuSummaryWidget(id="gpu-summary"), id="summary-panel")
+        yield VerticalScroll(AllGpusWidget(id="all-gpus"), id="gpus-panel")
         yield VerticalScroll(MyJobsWidget(id="my-jobs"), id="jobs-panel")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#node-panel").border_title = "NODES"
         self.query_one("#summary-panel").border_title = "GPU SUMMARY"
+        self.query_one("#gpus-panel").border_title = "ALL GPUs"
         self.query_one("#jobs-panel").border_title = "MY JOBS"
         self._refresh_timer = self.set_interval(self.refresh_interval, self._do_refresh)
         self.call_after_refresh(self._do_refresh)
@@ -580,6 +630,7 @@ class SlurmViz(App):
 
         self.query_one("#node-map", NodeMapWidget).data = data
         self.query_one("#gpu-summary", GpuSummaryWidget).data = data
+        self.query_one("#all-gpus", AllGpusWidget).data = data
         self.query_one("#my-jobs", MyJobsWidget).data = data
 
     def watch_demo_mode(self, value: bool) -> None:
