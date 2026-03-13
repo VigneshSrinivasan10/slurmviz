@@ -60,20 +60,20 @@ A terminal UI dashboard for monitoring Slurm GPU cluster status, built with [Tex
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ## Usage
 
 ```bash
 # Live mode (connects to Slurm)
-python slurmviz.py
+uv run slurmviz
 
 # Demo mode (fake data, no Slurm required)
-python slurmviz.py --demo
+uv run slurmviz --demo
 
 # Custom refresh interval (seconds)
-python slurmviz.py -r 10
+uv run slurmviz -r 10
 ```
 
 ### Keyboard Shortcuts
@@ -87,5 +87,5 @@ python slurmviz.py -r 10
 ## Requirements
 
 - Python 3.10+
-- [Textual](https://github.com/Textualize/textual) >= 1.0.0
+- [uv](https://docs.astral.sh/uv/)
 - Slurm commands (`sinfo`, `squeue`) for live data — falls back to demo mode automatically if unavailable
